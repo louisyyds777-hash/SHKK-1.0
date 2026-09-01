@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>手绘K线 · 单根高宽比选择</title>
+<style>
+  :root{ --paper:#f9f4e7; --ink:#4a4238; --bull:#c23a2f; --bear:#1f7d4d; }
+  *{box-sizing:border-box;}
+  body{margin:0; padding:24px 16px; background:#e7e1cf; font-family:'KaiTi','楷体','STKaiti',serif; color:var(--ink);}
+  .wrap{max-width:1720px; margin:0 auto;}
+  .head{
+    background:var(--paper); border:2px solid #d8cfb6; border-radius:10px;
+    padding:14px 20px; margin-bottom:18px; box-shadow:2px 3px 0 rgba(90,78,60,.15);
+  }
+  .head h1{font-size:21px; margin:0 0 6px;}
+  .head p{font-size:14.5px; color:#7a6f5c; margin:4px 0; line-height:1.7;}
+  .scheme{margin-bottom:26px;}
+  .scheme h2{
+    font-size:17px; margin:0 0 8px; padding:8px 14px;
+    background:var(--paper); border:2px solid #d8cfb6; border-radius:8px;
+    box-shadow:2px 3px 0 rgba(90,78,60,.12);
+  }
+  .scheme h2 small{font-weight:normal; color:#8b7f6a; margin-left:10px; font-size:14px;}
+  canvas{display:block; width:100%; background:var(--paper); border:2px solid #d8cfb6; border-radius:10px; box-shadow:2px 3px 0 rgba(90,78,60,.15);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <h1>✏ 单根手绘K线 · 高宽比方案选择（间隔已拉开）</h1>
+    <p>5个方案使用<b>同一批真实K线</b>（贵州茅台 日线）和<b>同一价格刻度</b>（最近20根的区间），唯一差别是<b>单根手绘K线的宽度</b>：单根按像素定宽、<b>间隔固定约42px</b>，一屏显示多少根由宽度自动决定——宽方案显示根数少一些，保证互不重叠、间隔清晰。</p>
+    <p>看完后告诉我方案字母（比如"C"），我把它设为正式版默认；也可以说"C和D之间"，我微调。</p>
+  </div>
+  <div id="schemes"></div>
+</div>
+
+<script>
+/*__ROUGH_JS__*/
+</script>
+<script>
+'use strict';
+const BARS = /*DATA*/[];
+const PRESETS = [
+  {key:'A', name:'窄高型', glyph:42,  desc:'单根42px · 最瘦高 · 一屏根数最多'},
+  {key:'B', name:'适中型', glyph:64,  desc:'单根64px · 正式版当前默认 · 参照项'},
+  {key:'C', name:'宽大型', glyph:90,  desc:'单根90px · 折线舒展'},
+  {key:'D', name:'特宽型', glyph:118, desc:'单根118px · 更接近手绘笔记本的形态'},
+  {key:'E', name:'超宽型', glyph:150, desc:'单根150px · 最宽，一屏根数最少'},
+];
+const GAPX = 42;                       /* 单根之间的固定间隔（px） */
+const W=1560, H=520;
+const M={l:68,r:28,t:46,b:36};
+const PRICE_RATIO=0.72, GAP=20;
+const REF_N=20;                        /* 价格刻度基准：最近20根的区间（所有方案一致，保证高度可比） */
+const C={paper:'#f9f4e7',ink:'#4a4238',inkFaint:'rgba(74,66,56,.75)',grid:'rgba(122,106,82,.20)',gridBold:'rgba(122,106,82,.34)',bull:'#c23a2f',bear:'#1f7d4d'};
+const FONT="'KaiTi','楷体','STKaiti',serif";
+
+const plotX=M.l, plotY=M.t, plotW=W-M.l-M.r;
+const priceH=(H-M.t-M.b)*PRICE_RATIO;
+const volTop=plotY+priceH+GAP, volH=H-M.b-volTop;
+const barsAll=BARS.map(b=>({ts:b[0],o:b[1],h:b[2],l:b[3],c:b[4],v:b[5]}));
+const ref=barsAll.slice(-REF_N);
+const minP=Math.min.apply(null,ref.map(b=>b.l))*0.985;
+const maxP=Math.max.apply(null,ref.map(b=>b.h))*1.015;
+const maxV=Math.max.apply(null,ref.map(b=>b.v))*1.08;
+
+function fmt2(x){return x.toFixed(2);}
+function shortDate(ts){const d=new Date(ts);return (d.getMonth()+1)+'/'+String(d.getDate()).padStart(2,'0');}
+function heurPath(b){return b.c>=b.o?[b.o,b.l,b.h,b.c]:[b.o,b.h,b.l,b.c];}
+function niceTicks(min,max,n){
+  const span=max-min, step0=span/n, mag=Math.pow(10,Math.floor(Math.log10(step0)));
+  const norm=step0/mag; const step=(norm<1.5?1:norm<3.5?2:norm<7.5?5:10)*mag;
+  const t0=Math.ceil(min/step)*step; const out=[];
+  for(let v=t0;v<=max+1e-9;v+=step) out.push(+v.toFixed(4));
+  return out;
+}
+
+const wrap=document.getElementById('schemes');
+PRESETS.forEach(p=>{
+  const sec=document.createElement('div');
+  sec.className='scheme';
+  const h2=document.createElement('h2');
+  h2.innerHTML='方案'+p.key+' · '+p.name+'<small>'+p.desc+'</small><span id="ar-'+p.key+'" style="float:right;color:#a06a1c;"></span>';
+  sec.appendChild(h2);
+  const cv=document.createElement('canvas');
+  sec.appendChild(cv);
+  wrap.appendChild(sec);
+  renderChart(cv,p);
+});
+
+function renderChart(cv,p){
+  const dpr=Math.max(1,window.devicePixelRatio||1);
+  cv.width=W*dpr; cv.height=H*dpr;
+  const g=cv.getContext('2d');
+  const rc=rough.canvas(cv);
+
+  const slotW=p.glyph+GAPX;
+  const n=Math.max(4,Math.floor(plotW/slotW));
+  const bars=barsAll.slice(-n);
+  const trajW=p.glyph;
+  const cx=i=>plotX+slotW*(i+0.5)+(plotW-slotW*n)/2;   /* 不足整屏时居中 */
+  const xOf=(i,t)=>cx(i)-trajW/2+t*trajW;
+  const yOf=pr=>plotY+(maxP-pr)/(maxP-minP)*priceH;
+
+  g.setTransform(dpr,0,0,dpr,0,0);
+  g.fillStyle=C.paper; g.fillRect(0,0,W,H);
+  g.font="14px "+FONT; g.fillStyle=C.ink; g.textAlign='left';
+  g.fillText('贵州茅台 600519 · 日线 · 方案'+p.key+'：单根宽'+p.glyph+'px · 间隔'+GAPX+'px · 本图'+n+'根', plotX, 28);
+  const ticks=niceTicks(minP,maxP,5);
+  g.textAlign='right'; g.font="12px "+FONT;
+  ticks.forEach(v=>{
+    const y=yOf(v);
+    g.strokeStyle=C.grid; g.lineWidth=1;
+    g.beginPath(); g.moveTo(plotX,y); g.lineTo(W-M.r,y); g.stroke();
+    g.fillStyle=C.inkFaint; g.fillText(fmt2(v), plotX-8, y+4);
+  });
+  g.textAlign='center';
+  bars.forEach((b,i)=>{ if(i%Math.ceil(n/6)===0||i===n-1) g.fillText(shortDate(b.ts), cx(i), H-12); });
+
+  g.save();
+  g.beginPath(); g.rect(plotX,plotY,plotW,priceH+GAP+volH); g.clip();
+  bars.forEach((b,i)=>{
+    const color=b.c>=b.o?C.bull:C.bear;
+    const vh=(b.v/maxV)*volH, vw=trajW;
+    rc.rectangle(cx(i)-vw/2, volTop+volH-vh, vw, vh, {
+      stroke:color, strokeWidth:1.4, roughness:0.9, seed:500+i*37,
+      fill:color, fillStyle:'hachure', hachureGap:4.5, hachureAngle:-41, fillWeight:1
+    });
+    const pts=heurPath(b).map((pr,k)=>[xOf(i,k/3),yOf(pr)]);
+    rc.linearPath(pts,{stroke:color,strokeWidth:2.2,roughness:1.15,bowing:1.0,seed:1000+i*77});
+    heurPath(b).forEach((pr,k)=>{
+      rc.circle(xOf(i,k/3),yOf(pr),12,{stroke:color,fill:C.paper,fillStyle:'solid',strokeWidth:2.2,roughness:1.5,seed:31+i*13+k*7});
+    });
+  });
+  g.restore();
+  g.strokeStyle=C.gridBold; g.lineWidth=1;
+  g.beginPath(); g.moveTo(plotX,volTop-GAP/2); g.lineTo(W-M.r,volTop-GAP/2); g.stroke();
+
+  let sum=0;
+  bars.forEach(b=>{ sum+=(yOf(b.l)-yOf(b.h))/trajW; });
+  document.getElementById('ar-'+p.key).textContent='平均高:宽 ≈ '+(sum/bars.length).toFixed(1)+' : 1';
+}
+</script>
+</body>
+</html>
