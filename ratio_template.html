@@ -27,9 +27,10 @@
 <body>
 <div class="wrap">
   <div class="head">
-    <h1>✏ 单根手绘K线 · 高宽比方案选择（间隔已拉开）</h1>
-    <p>5个方案使用<b>同一批真实K线</b>（贵州茅台 日线）和<b>同一价格刻度</b>（最近20根的区间），唯一差别是<b>单根手绘K线的宽度</b>：单根按像素定宽、<b>间隔固定约42px</b>，一屏显示多少根由宽度自动决定——宽方案显示根数少一些，保证互不重叠、间隔清晰。</p>
-    <p>看完后告诉我方案字母（比如"C"），我把它设为正式版默认；也可以说"C和D之间"，我微调。</p>
+    <h1>✏ 单根手绘K线 · 高宽比方案选择</h1>
+    <p>所有方案使用<b>同一批真实K线</b>（贵州茅台 日线）和<b>同一价格刻度</b>（最近20根的区间），单根按像素定宽、<b>间隔固定约42px</b>，一屏根数自动决定、互不重叠。按宽度从窄到宽排列。</p>
+    <p>其中 <b>F、G 两档按"目标高:宽"设计</b>（先算单根平均高度，再反推宽度）：F≈0.7:1、G≈0.6:1，即单根比宽度还矮的宽扁形。注意高:宽是<b>平均值</b>——单根有高有矮，波幅大的根更"胖"、波幅小的根更"瘦"。</p>
+    <p>看完后告诉我方案字母（比如"G"），我设为正式版默认；也可以说"G和E之间"，我微调。</p>
   </div>
   <div id="schemes"></div>
 </div>
@@ -40,12 +41,12 @@
 <script>
 'use strict';
 const BARS = /*DATA*/[];
-const PRESETS = [
+const FIXED_PRESETS = [
   {key:'A', name:'窄高型', glyph:42,  desc:'单根42px · 最瘦高 · 一屏根数最多'},
   {key:'B', name:'适中型', glyph:64,  desc:'单根64px · 正式版当前默认 · 参照项'},
   {key:'C', name:'宽大型', glyph:90,  desc:'单根90px · 折线舒展'},
-  {key:'D', name:'特宽型', glyph:118, desc:'单根118px · 更接近手绘笔记本的形态'},
-  {key:'E', name:'超宽型', glyph:150, desc:'单根150px · 最宽，一屏根数最少'},
+  {key:'D', name:'特宽型', glyph:118, desc:'单根118px'},
+  {key:'E', name:'超宽型', glyph:150, desc:'单根150px'},
 ];
 const GAPX = 42;                       /* 单根之间的固定间隔（px） */
 const W=1560, H=520;
@@ -63,6 +64,20 @@ const ref=barsAll.slice(-REF_N);
 const minP=Math.min.apply(null,ref.map(b=>b.l))*0.985;
 const maxP=Math.max.apply(null,ref.map(b=>b.h))*1.015;
 const maxV=Math.max.apply(null,ref.map(b=>b.v))*1.08;
+const yOf=pr=>plotY+(maxP-pr)/(maxP-minP)*priceH;
+
+/* 参考期内单根平均像素高度 → 反推目标高:宽的宽度 */
+let _s=0; ref.forEach(b=>{_s+=yOf(b.l)-yOf(b.h);});
+const AVG_REF_H=_s/ref.length;
+const RATIO_PRESETS=[
+  {key:'F', target:0.7, desc:''},
+  {key:'G', target:0.6, desc:''},
+].map(p=>{
+  const glyph=Math.round(AVG_REF_H/p.target);
+  return {key:p.key, name:'高:宽 '+p.target+':1', glyph,
+          desc:'单根'+glyph+'px · 目标平均高:宽≈'+p.target+':1（宽扁形，接近手绘笔记本形态）'};
+});
+const PRESETS=FIXED_PRESETS.concat(RATIO_PRESETS).sort((a,b)=>a.glyph-b.glyph);
 
 function fmt2(x){return x.toFixed(2);}
 function shortDate(ts){const d=new Date(ts);return (d.getMonth()+1)+'/'+String(d.getDate()).padStart(2,'0');}
@@ -100,7 +115,6 @@ function renderChart(cv,p){
   const trajW=p.glyph;
   const cx=i=>plotX+slotW*(i+0.5)+(plotW-slotW*n)/2;   /* 不足整屏时居中 */
   const xOf=(i,t)=>cx(i)-trajW/2+t*trajW;
-  const yOf=pr=>plotY+(maxP-pr)/(maxP-minP)*priceH;
 
   g.setTransform(dpr,0,0,dpr,0,0);
   g.fillStyle=C.paper; g.fillRect(0,0,W,H);
