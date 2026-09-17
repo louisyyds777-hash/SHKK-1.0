@@ -322,7 +322,9 @@ function genData(periodKey, seed, base){
 }
 
 /* ================= 数据加载 ================= */
+let loadStamp=0;
 async function loadBars(){
+  const stamp=++loadStamp;
   if(!SERVER){
     const base=(STOCKS.find(s=>s[0]===curStock.code)||[,,'20'])[2];
     bars=genData(curPeriod, codeHash(curStock.code)+Object.keys(PERIODS).indexOf(curPeriod)*7, base);
@@ -331,13 +333,24 @@ async function loadBars(){
   setStatus('正在加载 '+curStock.code+' '+PERIODS[curPeriod].full+' …');
   try{
     const d=await fetchJSON('/api/kline?symbol='+curStock.code+'&period='+curPeriod);
+    if(stamp!==loadStamp) return;
     if(d.name){ curStock.name=d.name; nameCache[curStock.code]=d.name; }
     bars=d.bars.map(b=>({ts:b[0],o:b[1],h:b[2],l:b[3],c:b[4],v:b[5],d1:false}));
     computeD1();
     postLoad(); loadDrawings();
+    setTimeout(()=>silentRefresh(stamp),12000);   /* 后台补全深历史后无感加深 */
   }catch(e){
     setStatus('加载失败：'+e.message+'（重试可点击周期或重新查询）');
   }
+}
+async function silentRefresh(stamp){
+  if(stamp!==loadStamp) return;
+  try{
+    const d=await fetchJSON('/api/kline?symbol='+curStock.code+'&period='+curPeriod);
+    if(stamp!==loadStamp||d.bars.length<=bars.length) return;
+    bars=d.bars.map(b=>({ts:b[0],o:b[1],h:b[2],l:b[3],c:b[4],v:b[5],d1:false}));
+    computeD1(); renderBase(); updateStatus();    /* 保持当前视野不变，只是历史变深 */
+  }catch(e){}
 }
 function computeD1(){
   let prevDay='';
@@ -1046,8 +1059,7 @@ window.addEventListener('keydown',e=>{
 });
 
 function tipHtml(b,i){
-  const prevC=i>0?bars[i-1].c:b.o;
-  const pct=(b.c/prevC-1)*100;
+  const pct=(b.c/b.o-1)*100;   /* 本根涨跌幅：当前K线周期内 (收-开)/开 */
   const col=b.c>=b.o?'var(--bull)':'var(--bear)';
   const bull=b.c>=b.o;
   const dt=new Date(b.ts);
@@ -1057,7 +1069,7 @@ function tipHtml(b,i){
     :'开'+fmt2(b.o)+' → 冲高'+fmt2(b.h)+' → 跌低'+fmt2(b.l)+' → 收'+fmt2(b.c);
   return '<div class="tip-date">'+curStock.name+' '+stamp+' · '+(bull?'多（收阳）':'空（收阴）')+'</div>'
     +'<div>开 '+fmt2(b.o)+'　高 '+fmt2(b.h)+'　低 '+fmt2(b.l)+'　收 <b style="color:'+col+'">'+fmt2(b.c)+'</b></div>'
-    +'<div>涨跌幅 <b style="color:'+col+'">'+(pct>=0?'+':'')+pct.toFixed(2)+'%</b>　量能 '+fmtVol(b.v)+'</div>'
+    +'<div>本根涨跌幅 <b style="color:'+col+'">'+(pct>=0?'+':'')+pct.toFixed(2)+'%</b>　量能 '+fmtVol(b.v)+'</div>'
     +'<div>轨迹：'+traj+'</div>';
 }
 
@@ -1164,6 +1176,7 @@ Object.keys(PERIODS).forEach(k=>{
 });
 function setPeriod(k){
   curPeriod=k;
+  try{ localStorage.setItem('hd_period',k); }catch(e){}   // 记住周期，重开页面不再回到默认
   seg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));
   loadBars();
 }
@@ -1176,6 +1189,7 @@ Object.keys(STYLES).forEach(k=>{
 });
 function setStyle(k){
   curStyle=k;
+  try{ localStorage.setItem('hd_style',k); }catch(e){}   // 记住画风，重开页面不再回到默认
   styleSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));
   renderBase(); updateStatus();
 }
@@ -1221,10 +1235,13 @@ function updateStatus(){
 /* ================= 启动 ================= */
 const qp=new URLSearchParams(location.search);
 const periodSeg=document.getElementById('periodSeg');
-setPeriod(PERIODS[qp.get('p')]?qp.get('p'):'1d');
+let _mp=null,_ms=null; try{ _mp=localStorage.getItem('hd_period'); _ms=localStorage.getItem('hd_style'); }catch(e){}
+const okP=v=>v&&Object.prototype.hasOwnProperty.call(PERIODS,v);
+const okS=v=>v&&Object.prototype.hasOwnProperty.call(STYLES,v);
+setPeriod(okP(qp.get('p'))?qp.get('p'):(okP(_mp)?_mp:'1d'));       // URL参数 > 上次记忆 > 默认
 const qc=qp.get('c');
 if(qc&&['none','full','body'].includes(qc)){ selCandle.value=qc; state.candle=qc; }
-setStyle(STYLES[qp.get('s')]?qp.get('s'):'pencil');
+setStyle(okS(qp.get('s'))?qp.get('s'):(okS(_ms)?_ms:'pencil'));
 setTool('cursor');
 searchInput.value=curStock.code+' '+(nameCache[curStock.code]||'');
 renderWatchlist();

@@ -12,6 +12,7 @@ API：
 import json
 import os
 import sys
+import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -88,13 +89,19 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/kline":
                 sym = (q.get("symbol") or [""])[0]
                 period = (q.get("period") or ["1d"])[0]
+                name_box = [None]
+
+                def _name():
+                    name_box[0] = store.name_of(sym)
+                th = threading.Thread(target=_name, daemon=True)   # 名称与K线并行，不串行多等一拍
+                th.start()
                 bars = store.get(sym, period)
-                name = store.name_of(sym)
+                th.join(1.0)                                       # 最多等名称1秒，等不到先出图（下次命中内存缓存）
                 if not bars:
                     self._json({"error": f"无数据：{sym} {period}"}, 404)
                     return
                 self._json({"code": data_source.normalize_symbol(sym)[2:],
-                            "name": name or sym, "period": period, "bars": bars})
+                            "name": name_box[0] or sym, "period": period, "bars": bars})
             elif u.path == "/api/search":
                 kw = (q.get("q") or [""])[0]
                 res = data_source.search(kw) if kw else []

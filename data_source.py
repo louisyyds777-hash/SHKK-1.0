@@ -23,6 +23,9 @@ import requests
 BJ = timezone(timedelta(hours=8))
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
+_sess = requests.Session()          # 连接复用：翻页/搜索池省掉每次TCP+TLS握手
+_sess.headers.update(UA)
+
 BASE_MKLINE = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
 BASE_FQKLINE = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 BASE_QUOTE = "https://qt.gtimg.cn/q="
@@ -45,7 +48,7 @@ def http_text(url, encoding="utf-8"):
     last = None
     for i in range(3):
         try:
-            r = requests.get(url, headers=UA, timeout=15)
+            r = _sess.get(url, timeout=15)
             r.encoding = encoding
             return r.text
         except Exception as e:  # noqa: BLE001
@@ -99,10 +102,10 @@ def fetch_kline_tx(symbol, tf="day", end="", count=640, fq=""):
     return out
 
 
-def fetch_daily_full(symbol):
-    """日K全史：640根/页向前翻页"""
+def fetch_daily_full(symbol, before=""):
+    """日K全史：640根/页向前翻页。before=已缓存最早交易日，从其前一天起补（增量补全史）"""
     all_rows = []
-    end = ""
+    end = before
     while True:
         rows = fetch_kline_tx(symbol, "day", end=end, count=640)
         if not rows:
@@ -247,12 +250,15 @@ def _atomic_write(path, text):
 
 
 class KlineStore:
-    """K线缓存：data_store/kline/{symbol}/{tf}.json，60秒节流增量更新"""
+    """K线缓存：data_store/kline/{symbol}/{tf}.json。
+    秒开策略：有缓存立即返回（过期→后台增量刷新）；冷缓存同步只发1个快请求先出图，
+    全史/新浪打底/重采样回退全部挪到后台线程补齐（stale-while-revalidate）。"""
 
     def __init__(self):
         self.lock = threading.RLock()
         self.mem = {}
         self.last_fetch = {}
+        self.refreshing = set()        # 正在后台刷新的 (sym, tf)
         self.names = {}
 
     def _path(self, sym, tf):
@@ -271,45 +277,87 @@ class KlineStore:
     def _save(self, sym, tf, bars):
         _atomic_write(self._path(sym, tf), json.dumps(bars))
 
-    def _raw(self, sym, tf):
-        """带增量更新的原始（含未收盘尾根）序列"""
+    def _fetch_upstream(self, sym, tf, deep):
+        """实际拉数并合并入缓存（网络在锁外，不阻塞其他 symbol/period 请求）。
+        deep=False 快路径：只发1个请求（分钟=腾讯800根，日=最近一页，周月=直取）。
+        deep=True 深挖：日K补全史翻页、分钟新浪打底到~1970根、周月失败回退日线重采样。"""
         with self.lock:
-            if (sym, tf) not in self.mem:
-                self.mem[(sym, tf)] = self._load(sym, tf)
-            bars = self.mem[(sym, tf)]
-            now = time.time()
-            if now - self.last_fetch.get((sym, tf), 0) > 60:
-                self.last_fetch[(sym, tf)] = now
+            bars = self.mem.get((sym, tf)) or []
+        if tf in TF_MS:
+            rows = fetch_mkline_tx(sym, tf, 800)
+            if deep and len(bars) < 1900:            # 浅窗 → 新浪打底
                 try:
-                    if tf in TF_MS:
-                        rows = fetch_mkline_tx(sym, tf, 800)
-                        if len(bars) < 500:                # 浅窗 → 新浪打底
-                            try:
-                                rows = merge_bars(fetch_mkline_sina(sym, tf, 1970), rows)
-                            except Exception:  # noqa: BLE001
-                                pass
-                        bars = merge_bars(bars, rows)
-                    elif tf == "1d":
-                        if len(bars) < 300:                # 首触全史
-                            bars = merge_bars(bars, fetch_daily_full(sym))
-                        else:
-                            bars = merge_bars(bars, fetch_kline_tx(sym, "day"))
-                    else:                                   # 1w / 1M：腾讯周/月线直取，失败回退日线重采样
-                        api_tf = {"1w": "week", "1M": "month"}[tf]
-                        try:
-                            rows = fetch_kline_tx(sym, api_tf, count=640)
-                            if rows:
-                                bars = merge_bars(bars, rows)
-                            else:
-                                raise ValueError("empty " + api_tf)
-                        except Exception:  # noqa: BLE001
-                            daily = self._raw(sym, "1d")
-                            bars = resample_daily(daily, tf)
-                    self.mem[(sym, tf)] = bars
-                    self._save(sym, tf, bars)
+                    rows = merge_bars(fetch_mkline_sina(sym, tf, 1970), rows)
                 except Exception:  # noqa: BLE001
-                    pass                       # 拉取失败容忍陈旧缓存
+                    pass
+            new = merge_bars(bars, rows)
+        elif tf == "1d":
+            if deep:
+                before = ""
+                if bars:
+                    first = datetime.fromtimestamp(bars[0][0] / 1000, BJ)
+                    before = (first - timedelta(days=1)).strftime("%Y-%m-%d")
+                new = merge_bars(bars, fetch_daily_full(sym, before))
+            else:
+                new = merge_bars(bars, fetch_kline_tx(sym, "day"))
+        else:                                        # 1w / 1M：腾讯周/月线直取，失败回退日线重采样
+            api_tf = {"1w": "week", "1M": "month"}[tf]
+            try:
+                rows = fetch_kline_tx(sym, api_tf, count=640)
+                if rows:
+                    new = merge_bars(bars, rows)
+                else:
+                    raise ValueError("empty " + api_tf)
+            except Exception:  # noqa: BLE001
+                if deep or not bars:
+                    daily = self._raw(sym, "1d")
+                    new = resample_daily(daily, tf)
+                else:
+                    new = bars
+        with self.lock:
+            self.mem[(sym, tf)] = new
+            self._save(sym, tf, new)
+        return new
+
+    def _refresh_async(self, sym, tf, deep):
+        key = (sym, tf)
+        with self.lock:
+            if key in self.refreshing:
+                return
+            self.refreshing.add(key)
+
+        def run():
+            try:
+                self._fetch_upstream(sym, tf, deep)
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                with self.lock:
+                    self.refreshing.discard(key)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _raw(self, sym, tf):
+        """带增量更新的原始（含未收盘尾根）序列。
+        任何情况下最多同步等1个快请求；深挖一律后台。"""
+        key = (sym, tf)
+        with self.lock:
+            if key not in self.mem:
+                self.mem[key] = self._load(sym, tf)
+            bars = self.mem[key]
+            fresh = time.time() - self.last_fetch.get(key, 0) <= 60
+            if not fresh:
+                self.last_fetch[key] = time.time()      # 先占位，防并发重复拉
+        if bars:
+            if not fresh:                               # 有缓存：立即返回，后台增量刷新
+                self._refresh_async(sym, tf, deep=False)
             return bars
+        try:                                            # 冷缓存：同步快路径先出图
+            self._fetch_upstream(sym, tf, deep=False)
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh_async(sym, tf, deep=True)         # 后台补全史/打底
+        with self.lock:
+            return self.mem.get(key, [])
 
     def get(self, code, tf):
         sym = normalize_symbol(code)
@@ -367,6 +415,7 @@ def search_pool():
 
 def build_pool_async():
     def run():
+        time.sleep(2.0)                             # 让首页K线快路径先抢到带宽
         with _pool_lock:
             if _pool_state["building"]:
                 return
