@@ -139,6 +139,8 @@
     </div>
     <span class="seg-label">周期</span>
     <div class="seg" id="periodSeg"></div>
+    <span class="seg-label">K线高度</span>
+    <div class="seg" id="heightSeg"></div>
     <span class="seg-label">画风</span>
     <div class="seg" id="styleSeg"></div>
     <span class="seg-label">画线</span>
@@ -262,6 +264,10 @@ let bars=[];                 // [{ts,o,h,l,c,v,d1}]
 let curStock={code:'600519', name:'贵州茅台'};
 const view={x0:0,x1:1,pmin:0,pmax:1};
 const state={candle:'none',showVol:true,showVals:false,showAlt:false,magnet:true};
+let _hk='55'; try{ _hk=localStorage.getItem('hd_height')||'55'; }catch(e){}
+const HEIGHT_K={'55':1.87,'42':2.45};             // K线高度档位：价格轴范围系数（越大K线越矮）
+if(!HEIGHT_K[_hk]) _hk='55';
+let heightK=HEIGHT_K[_hk];
 const nameCache={'600519':'贵州茅台'};
 let watchlist=['600519','300750','601899','000858'];
 try{
@@ -383,7 +389,7 @@ function fitY(){
   const [i0,i1]=visRange(); let mn=Infinity,mx=-Infinity;
   for(let i=i0;i<i1;i++){const b=bars[i];if(b.l<mn)mn=b.l;if(b.h>mx)mx=b.h;}
   if(!isFinite(mn)){const d=dataBounds();mn=d.mn;mx=d.mx;}
-  view.pmin=mn*0.985; view.pmax=mx*1.015;
+  const mid=(mn+mx)/2, half=(mx-mn)*heightK/2; view.pmin=mid-half; view.pmax=mid+half;
 }
 function resetView(){ const N=bars.length; view.x0=Math.max(0,N-DEFAULT_BARS); view.x1=N; fitY(); }
 function clampView(){
@@ -1193,6 +1199,19 @@ function setStyle(k){
   styleSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));
   renderBase(); updateStatus();
 }
+const heightSeg=document.getElementById('heightSeg');
+['55','42'].forEach(k=>{                         // 显式顺序：默认档在前
+  const b=document.createElement('button');
+  b.textContent=k+'%'; b.dataset.k=k;
+  b.addEventListener('click',()=>setHeight(k));
+  heightSeg.appendChild(b);
+});
+function setHeight(k){
+  heightK=HEIGHT_K[k];
+  try{ localStorage.setItem('hd_height',k); }catch(e){}   // 记住高度档位
+  heightSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));
+  fitY(); renderBase(); renderOverlay(); updateStatus();
+}
 const toolSeg=document.getElementById('toolSeg');
 TOOLS.forEach(([k,label])=>{
   const b=document.createElement('button');
@@ -1242,6 +1261,7 @@ setPeriod(okP(qp.get('p'))?qp.get('p'):(okP(_mp)?_mp:'1d'));       // URL参数 
 const qc=qp.get('c');
 if(qc&&['none','full','body'].includes(qc)){ selCandle.value=qc; state.candle=qc; }
 setStyle(okS(qp.get('s'))?qp.get('s'):(okS(_ms)?_ms:'pencil'));
+heightSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.k===_hk));   // 初始高度档位按钮
 setTool('cursor');
 searchInput.value=curStock.code+' '+(nameCache[curStock.code]||'');
 renderWatchlist();
