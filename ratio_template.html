@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>手绘K线 · 单根高宽比选择</title>
+<title>手绘K线 · 单根形态与密度体验</title>
 <style>
   :root{ --paper:#f9f4e7; --ink:#4a4238; --bull:#c23a2f; --bear:#1f7d4d; }
   *{box-sizing:border-box;}
@@ -21,16 +21,24 @@
     box-shadow:2px 3px 0 rgba(90,78,60,.12);
   }
   .scheme h2 small{font-weight:normal; color:#8b7f6a; margin-left:10px; font-size:14px;}
-  canvas{display:block; width:100%; background:var(--paper); border:2px solid #d8cfb6; border-radius:10px; box-shadow:2px 3px 0 rgba(90,78,60,.15);}
+  canvas{display:block; width:100%; background:var(--paper); border:2px solid #d8cfb6; border-radius:10px; box-shadow:2px 3px 0 rgba(90,78,60,.15); cursor:grab; touch-action:none;}
+  canvas.dragging{cursor:grabbing;}
+  .ctrlbar{display:flex; gap:8px; align-items:center; margin-top:10px;}
+  .ctrlbar button{font-family:inherit;font-size:14px;color:var(--ink);background:#f3ecd8;border:2px solid #c9bc98;border-radius:8px;padding:4px 14px;cursor:pointer;}
+  .ctrlbar button.on{background:#e8d9ac;font-weight:bold;}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="head">
-    <h1>✏ 单根手绘K线 · 高宽比方案选择</h1>
-    <p>所有方案使用<b>同一批真实K线</b>（贵州茅台 日线）和<b>同一价格刻度</b>（最近20根的区间），单根按像素定宽、<b>间隔固定约42px</b>，一屏根数自动决定、互不重叠。按宽度从窄到宽排列。</p>
-    <p>其中 <b>F、G 两档按"目标高:宽"设计</b>（先算单根平均高度，再反推宽度）：F≈0.7:1、G≈0.6:1，即单根比宽度还矮的宽扁形。注意高:宽是<b>平均值</b>——单根有高有矮，波幅大的根更"胖"、波幅小的根更"瘦"。</p>
-    <p>看完后告诉我方案字母（比如"G"），我设为正式版默认；也可以说"G和E之间"，我微调。</p>
+    <h1>✏ 手绘K线 · 完全自由缩放体验</h1>
+    <p><b>每一张图都支持完全自由的缩放</b>：滚轮（以鼠标位置为中心）缩放——可以缩到<b>很小</b>一眼看全部250个交易日，也可以放到很大看单根；按住拖动上下左右平移；双击复位回该图初始视野。数据：贵州茅台 日线 最近250根（一根日线=一根手绘K线）。</p>
+    <p>6张图初始密度不同（80/40/20/12/8/5根），只是起点不同，缩放范围完全一样。找到你觉得最舒服的密度/形态后，告诉我那张图的<b>初始档位+你缩放后的可见根数</b>（比如"20根那档，我缩到约35根最舒服"），我按此设置正式版默认。</p>
+    <div class="ctrlbar"><span>叠加对照：</span>
+      <button data-ov="none">无</button>
+      <button data-ov="full" class="on">完整蜡烛（K线）</button>
+      <button data-ov="body">仅实体（圆柱）</button>
+    </div>
   </div>
   <div id="schemes"></div>
 </div>
@@ -41,18 +49,10 @@
 <script>
 'use strict';
 const BARS = /*DATA*/[];
-const FIXED_PRESETS = [
-  {key:'A', name:'窄高型', glyph:42,  desc:'单根42px · 最瘦高 · 一屏根数最多'},
-  {key:'B', name:'适中型', glyph:64,  desc:'单根64px · 正式版当前默认 · 参照项'},
-  {key:'C', name:'宽大型', glyph:90,  desc:'单根90px · 折线舒展'},
-  {key:'D', name:'特宽型', glyph:118, desc:'单根118px'},
-  {key:'E', name:'超宽型', glyph:150, desc:'单根150px'},
-];
-const GAPX = 42;                       /* 单根之间的固定间隔（px） */
-const W=1560, H=520;
+const INIT_VIEWS = [80, 40, 20, 12, 8, 5];     /* 各图初始可见根数（复位目标） */
+const W=1560, H=560;
 const M={l:68,r:28,t:46,b:36};
 const PRICE_RATIO=0.72, GAP=20;
-const REF_N=20;                        /* 价格刻度基准：最近20根的区间（所有方案一致，保证高度可比） */
 const C={paper:'#f9f4e7',ink:'#4a4238',inkFaint:'rgba(74,66,56,.75)',grid:'rgba(122,106,82,.20)',gridBold:'rgba(122,106,82,.34)',bull:'#c23a2f',bear:'#1f7d4d'};
 const FONT="'KaiTi','楷体','STKaiti',serif";
 
@@ -60,24 +60,12 @@ const plotX=M.l, plotY=M.t, plotW=W-M.l-M.r;
 const priceH=(H-M.t-M.b)*PRICE_RATIO;
 const volTop=plotY+priceH+GAP, volH=H-M.b-volTop;
 const barsAll=BARS.map(b=>({ts:b[0],o:b[1],h:b[2],l:b[3],c:b[4],v:b[5]}));
-const ref=barsAll.slice(-REF_N);
-const minP=Math.min.apply(null,ref.map(b=>b.l))*0.985;
-const maxP=Math.max.apply(null,ref.map(b=>b.h))*1.015;
-const maxV=Math.max.apply(null,ref.map(b=>b.v))*1.08;
-const yOf=pr=>plotY+(maxP-pr)/(maxP-minP)*priceH;
+const N=barsAll.length;
+let gMin=Infinity,gMax=-Infinity;
+barsAll.forEach(b=>{if(b.l<gMin)gMin=b.l;if(b.h>gMax)gMax=b.h;});
+const fullRange=gMax-gMin;
 
-/* 参考期内单根平均像素高度 → 反推目标高:宽的宽度 */
-let _s=0; ref.forEach(b=>{_s+=yOf(b.l)-yOf(b.h);});
-const AVG_REF_H=_s/ref.length;
-const RATIO_PRESETS=[
-  {key:'F', target:0.7, desc:''},
-  {key:'G', target:0.6, desc:''},
-].map(p=>{
-  const glyph=Math.round(AVG_REF_H/p.target);
-  return {key:p.key, name:'高:宽 '+p.target+':1', glyph,
-          desc:'单根'+glyph+'px · 目标平均高:宽≈'+p.target+':1（宽扁形，接近手绘笔记本形态）'};
-});
-const PRESETS=FIXED_PRESETS.concat(RATIO_PRESETS).sort((a,b)=>a.glyph-b.glyph);
+let overlay='full';
 
 function fmt2(x){return x.toFixed(2);}
 function shortDate(ts){const d=new Date(ts);return (d.getMonth()+1)+'/'+String(d.getDate()).padStart(2,'0');}
@@ -91,69 +79,191 @@ function niceTicks(min,max,n){
 }
 
 const wrap=document.getElementById('schemes');
-PRESETS.forEach(p=>{
+const sections=[];
+
+function addSection(initN){
   const sec=document.createElement('div');
   sec.className='scheme';
   const h2=document.createElement('h2');
-  h2.innerHTML='方案'+p.key+' · '+p.name+'<small>'+p.desc+'</small><span id="ar-'+p.key+'" style="float:right;color:#a06a1c;"></span>';
+  h2.innerHTML='初始 '+initN+' 根 · <span class="slbl" style="color:#a06a1c;"></span>'
+    +'<small>滚轮缩放（可缩到全部'+N+'根）· 拖动平移 · 双击复位</small>'
+    +'<span class="sar" style="float:right;color:#a06a1c;"></span>';
   sec.appendChild(h2);
   const cv=document.createElement('canvas');
   sec.appendChild(cv);
   wrap.appendChild(sec);
-  renderChart(cv,p);
-});
 
-function renderChart(cv,p){
+  const st={canvas:cv, initN, label:h2.querySelector('.slbl'), ar:h2.querySelector('.sar'),
+            view:{x0:0,x1:1,pmin:gMin,pmax:gMax}, pan:null};
+  resetView(st);
+  bindEvents(st, cv);
+  sections.push(st);
+  render(st);
+}
+
+function resetView(st){
+  st.view.x0=Math.max(0,N-st.initN); st.view.x1=N; fitY(st);
+}
+function visRange(st){
+  return [Math.max(0,Math.floor(st.view.x0)-1), Math.min(N,Math.ceil(st.view.x1)+1)];
+}
+function fitY(st){
+  const [i0,i1]=visRange(st);
+  let mn=Infinity,mx=-Infinity;
+  for(let i=i0;i<i1;i++){const b=barsAll[i];if(b.l<mn)mn=b.l;if(b.h>mx)mx=b.h;}
+  if(!isFinite(mn)){mn=gMin;mx=gMax;}
+  st.view.pmin=mn*0.985; st.view.pmax=mx*1.015;
+}
+function clampView(st){
+  const v=st.view;
+  let sx=v.x1-v.x0; const cx=(v.x0+v.x1)/2;
+  if(sx<2)sx=2; if(sx>N)sx=N;
+  v.x0=cx-sx/2; v.x1=cx+sx/2;
+  v.x0=Math.min(Math.max(v.x0,-sx*0.25),N-sx*0.75);
+  v.x1=v.x0+sx;
+  let sy=v.pmax-v.pmin; const cy=(v.pmin+v.pmax)/2;
+  if(sy<fullRange*0.02)sy=fullRange*0.02; if(sy>fullRange*3)sy=fullRange*3;
+  v.pmin=cy-sy/2; v.pmax=cy+sy/2;
+  v.pmin=Math.min(Math.max(v.pmin,gMin-fullRange),gMax);
+  v.pmax=v.pmin+sy;
+}
+
+function bindEvents(st, cv){
+  const dpr=Math.max(1,window.devicePixelRatio||1);
+  const XY=e=>{
+    const r=cv.getBoundingClientRect();
+    return {x:(e.clientX-r.left)*W/r.width, y:(e.clientY-r.top)*H/r.height};
+  };
+  cv.addEventListener('pointerdown',e=>{
+    st.pan={cx:e.clientX,cy:e.clientY,v:{...st.view}};
+    cv.classList.add('dragging');
+    cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener('pointermove',e=>{
+    if(!st.pan) return;
+    const r=cv.getBoundingClientRect();
+    const dx=(e.clientX-st.pan.cx)*W/r.width;
+    const dy=(e.clientY-st.pan.cy)*H/r.height;
+    const sx=st.pan.v.x1-st.pan.v.x0, sy=st.pan.v.pmax-st.pan.v.pmin;
+    st.view.x0=st.pan.v.x0-dx/plotW*sx; st.view.x1=st.pan.v.x1-dx/plotW*sx;
+    st.view.pmin=st.pan.v.pmin+dy/priceH*sy; st.view.pmax=st.pan.v.pmax+dy/priceH*sy;
+    clampView(st); render(st);
+  });
+  ['pointerup','pointercancel'].forEach(ev=>cv.addEventListener(ev,()=>{
+    st.pan=null; cv.classList.remove('dragging');
+  }));
+  cv.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const {x,y}=XY(e);
+    const v=st.view;
+    const f=e.deltaY>0?1.18:1/1.18;          /* 滚轮向上=放大 */
+    const bx=v.x0+(x-plotX)/plotW*(v.x1-v.x0);
+    const py=v.pmax-(y-plotY)/priceH*(v.pmax-v.pmin);
+    v.x0=bx-(bx-v.x0)*f; v.x1=bx+(v.x1-bx)*f;
+    v.pmin=py-(py-v.pmin)*f; v.pmax=py+(v.pmax-py)*f;
+    clampView(st); render(st);
+  },{passive:false});
+  cv.addEventListener('dblclick',()=>{ resetView(st); render(st); });
+}
+
+function render(st){
+  const cv=st.canvas, v=st.view;
   const dpr=Math.max(1,window.devicePixelRatio||1);
   cv.width=W*dpr; cv.height=H*dpr;
   const g=cv.getContext('2d');
   const rc=rough.canvas(cv);
 
-  const slotW=p.glyph+GAPX;
-  const n=Math.max(4,Math.floor(plotW/slotW));
-  const bars=barsAll.slice(-n);
-  const trajW=p.glyph;
-  const cx=i=>plotX+slotW*(i+0.5)+(plotW-slotW*n)/2;   /* 不足整屏时居中 */
+  const spanX=v.x1-v.x0;
+  const slotW=plotW/spanX;
+  const trajW=Math.max(3,Math.min(slotW*0.62,260));
+  const tiny=slotW<6;
+  const cx=i=>plotX+((i+0.5)-v.x0)*slotW;
   const xOf=(i,t)=>cx(i)-trajW/2+t*trajW;
+  const yOf=pr=>plotY+(v.pmax-pr)/(v.pmax-v.pmin)*priceH;
+  const [i0,i1]=visRange(st);
+  const nVis=i1-i0;
+  let maxV=1;
+  for(let i=i0;i<i1;i++) if(barsAll[i].v>maxV) maxV=barsAll[i].v;
+  maxV*=1.08;
 
   g.setTransform(dpr,0,0,dpr,0,0);
   g.fillStyle=C.paper; g.fillRect(0,0,W,H);
   g.font="14px "+FONT; g.fillStyle=C.ink; g.textAlign='left';
-  g.fillText('贵州茅台 600519 · 日线 · 方案'+p.key+'：单根宽'+p.glyph+'px · 间隔'+GAPX+'px · 本图'+n+'根', plotX, 28);
-  const ticks=niceTicks(minP,maxP,5);
+  g.fillText('贵州茅台 600519 · 日线 · 共'+N+'根 · 当前可见'+nVis+'根 · 单根宽'+trajW.toFixed(0)+'px'+(tiny?'（简笔模式）':''), plotX, 28);
+  const ticks=niceTicks(v.pmin,v.pmax,5);
   g.textAlign='right'; g.font="12px "+FONT;
-  ticks.forEach(v=>{
-    const y=yOf(v);
+  ticks.forEach(t=>{
+    const y=yOf(t);
+    if(y<plotY-2||y>plotY+priceH+2) return;
     g.strokeStyle=C.grid; g.lineWidth=1;
     g.beginPath(); g.moveTo(plotX,y); g.lineTo(W-M.r,y); g.stroke();
-    g.fillStyle=C.inkFaint; g.fillText(fmt2(v), plotX-8, y+4);
+    g.fillStyle=C.inkFaint; g.fillText(fmt2(t), plotX-8, y+4);
   });
-  g.textAlign='center';
-  bars.forEach((b,i)=>{ if(i%Math.ceil(n/6)===0||i===n-1) g.fillText(shortDate(b.ts), cx(i), H-12); });
+  const labelStep=Math.max(1,Math.round(58/slotW));
+  g.textAlign='center'; g.font="11.5px "+FONT;
+  for(let i=Math.max(0,i0);i<i1;i++){
+    if(i%labelStep!==0&&i!==N-1) continue;
+    g.fillStyle=C.inkFaint;
+    g.fillText(shortDate(barsAll[i].ts), cx(i), H-12);
+  }
 
   g.save();
   g.beginPath(); g.rect(plotX,plotY,plotW,priceH+GAP+volH); g.clip();
-  bars.forEach((b,i)=>{
+  for(let i=i0;i<i1;i++){
+    const b=barsAll[i];
     const color=b.c>=b.o?C.bull:C.bear;
+    if(overlay!=='none'){
+      g.save();
+      g.globalAlpha=overlay==='body'?0.38:0.26;
+      const bw=Math.max(4,trajW*0.55), ccx=cx(i);
+      if(overlay==='full'){
+        g.strokeStyle=color; g.lineWidth=1.6;
+        g.beginPath(); g.moveTo(ccx,yOf(b.h)); g.lineTo(ccx,yOf(b.l)); g.stroke();
+      }
+      const y1=yOf(Math.max(b.o,b.c)), y2=yOf(Math.min(b.o,b.c));
+      g.fillStyle=color; g.fillRect(ccx-bw/2,y1,bw,Math.max(1.5,y2-y1));
+      g.restore();
+    }
     const vh=(b.v/maxV)*volH, vw=trajW;
-    rc.rectangle(cx(i)-vw/2, volTop+volH-vh, vw, vh, {
-      stroke:color, strokeWidth:1.4, roughness:0.9, seed:500+i*37,
-      fill:color, fillStyle:'hachure', hachureGap:4.5, hachureAngle:-41, fillWeight:1
-    });
+    if(tiny){
+      g.save(); g.globalAlpha=0.55; g.fillStyle=color;
+      g.fillRect(cx(i)-vw/2, volTop+volH-vh, Math.max(1,vw), vh); g.restore();
+    }else{
+      rc.rectangle(cx(i)-vw/2, volTop+volH-vh, vw, vh, {
+        stroke:color, strokeWidth:1.4, roughness:0.9, seed:500+i*37,
+        fill:color, fillStyle:'hachure', hachureGap:4.5, hachureAngle:-41, fillWeight:1
+      });
+    }
     const pts=heurPath(b).map((pr,k)=>[xOf(i,k/3),yOf(pr)]);
-    rc.linearPath(pts,{stroke:color,strokeWidth:2.2,roughness:1.15,bowing:1.0,seed:1000+i*77});
-    heurPath(b).forEach((pr,k)=>{
-      rc.circle(xOf(i,k/3),yOf(pr),12,{stroke:color,fill:C.paper,fillStyle:'solid',strokeWidth:2.2,roughness:1.5,seed:31+i*13+k*7});
-    });
-  });
+    if(tiny){
+      g.strokeStyle=color; g.lineWidth=1.2;
+      g.beginPath(); pts.forEach((p,k)=>k===0?g.moveTo(p[0],p[1]):g.lineTo(p[0],p[1])); g.stroke();
+    }else{
+      rc.linearPath(pts,{stroke:color,strokeWidth:2.2,roughness:1.15,bowing:1.0,seed:1000+i*77});
+      heurPath(b).forEach((pr,k)=>{
+        rc.circle(xOf(i,k/3),yOf(pr),12,{stroke:color,fill:C.paper,fillStyle:'solid',strokeWidth:2.2,roughness:1.5,seed:31+i*13+k*7});
+      });
+    }
+  }
   g.restore();
   g.strokeStyle=C.gridBold; g.lineWidth=1;
   g.beginPath(); g.moveTo(plotX,volTop-GAP/2); g.lineTo(W-M.r,volTop-GAP/2); g.stroke();
 
-  let sum=0;
-  bars.forEach(b=>{ sum+=(yOf(b.l)-yOf(b.h))/trajW; });
-  document.getElementById('ar-'+p.key).textContent='平均高:宽 ≈ '+(sum/bars.length).toFixed(1)+' : 1';
+  st.label.textContent='当前可见 '+nVis+' 根 · 单根宽 '+trajW.toFixed(0)+'px';
+  let sum=0,cnt=0;
+  for(let i=Math.max(0,i0);i<i1;i++){ sum+=(yOf(barsAll[i].l)-yOf(barsAll[i].h))/trajW; cnt++; }
+  st.ar.textContent='可见平均高:宽 ≈ '+(cnt?sum/cnt:0).toFixed(2)+' : 1';
 }
+
+document.querySelectorAll('.ctrlbar button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    overlay=b.dataset.ov;
+    document.querySelectorAll('.ctrlbar button').forEach(x=>x.classList.toggle('on',x===b));
+    sections.forEach(render);
+  });
+});
+
+INIT_VIEWS.forEach(addSection);
 </script>
 </body>
 </html>

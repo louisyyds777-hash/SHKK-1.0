@@ -586,8 +586,7 @@ function drawHover(i){
   ctx.fillRect(plotX+(i-view.x0)*slotW(), plotY, slotW(), priceH+GAP+volH);
 }
 function tipHtml(b,i){
-  const prevC=i>0?bars[i-1].c:b.o;
-  const pct=((b.c/prevC-1)*100);
+  const pct=((b.c/b.o-1)*100);   /* 本根涨跌幅：当前K线周期内 (收-开)/开 */
   const col=b.c>=b.o?'var(--bull)':'var(--bear)';
   const bull=b.c>=b.o;
   const stamp = PERIODS[curPeriod].kind==='min' ? fmtDate(b.dt)+' '+hhmm(b.dt) : fmtDate(b.dt);
@@ -596,7 +595,7 @@ function tipHtml(b,i){
     : '开'+fmt2(b.o)+' → 冲高'+fmt2(b.h)+' → 跌低'+fmt2(b.l)+' → 收'+fmt2(b.c);
   return '<div class="tip-date">'+curStock.name+' '+stamp+' · '+(bull?'多（收阳）':'空（收阴）')+'</div>'
     +'<div>开 '+fmt2(b.o)+'　高 '+fmt2(b.h)+'　低 '+fmt2(b.l)+'　收 <b style="color:'+col+'">'+fmt2(b.c)+'</b></div>'
-    +'<div>涨跌幅 <b style="color:'+col+'">'+(pct>=0?'+':'')+pct.toFixed(2)+'%</b>　量能 '+fmtVol(b.v)+'</div>'
+    +'<div>本根涨跌幅 <b style="color:'+col+'">'+(pct>=0?'+':'')+pct.toFixed(2)+'%</b>　量能 '+fmtVol(b.v)+'</div>'
     +'<div>轨迹：'+traj+'</div>';
 }
 canvas.addEventListener('pointerdown',e=>{

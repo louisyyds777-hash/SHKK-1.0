@@ -11,3 +11,7 @@ chanlun-DA.v1.0/
 
 # 会话/编辑器
 .zcode/
+
+# 编辑备份文件
+*.bak-*
+*.bak
