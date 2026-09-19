@@ -4,7 +4,9 @@
 启动：python server.py  →  自动打开浏览器 http://127.0.0.1:8791/
 API：
   GET  /api/kline?symbol=600519&period=1d        真实K线（分钟/日/周/月）
-  GET  /api/search?q=茅台                        股票搜索（新浪全A池，7天缓存）
+      symbol 也支持加密品种：BTC/BTCUSDT/BTC-USDT/比特币 等（Binance主源+OKX备源）
+  GET  /api/search?q=茅台                        股票搜索（新浪全A池，7天缓存；加密品种内置直出）
+  GET  /api/source-status                        四个上游数据源连通性体检（30秒缓存）
   GET  /api/name?code=600519                     代码→名称（腾讯报价）
   GET  /api/drawings?symbol=600519               读取画线
   POST /api/drawings?symbol=600519  {items:[..]} 整体保存画线
@@ -100,8 +102,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not bars:
                     self._json({"error": f"无数据：{sym} {period}"}, 404)
                     return
-                self._json({"code": data_source.normalize_symbol(sym)[2:],
-                            "name": name_box[0] or sym, "period": period, "bars": bars})
+                self._json({"code": data_source.short_code(sym),
+                            "name": name_box[0] or sym, "period": period, "bars": bars,
+                            "src": store.meta_of(sym, period)})
             elif u.path == "/api/search":
                 kw = (q.get("q") or [""])[0]
                 res = data_source.search(kw) if kw else []
@@ -114,8 +117,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"code": code, "name": store.name_of(code)})
             elif u.path == "/api/drawings":
                 sym = (q.get("symbol") or [""])[0]
-                code = data_source.normalize_symbol(sym)
-                self._json(drawings_store.load(code[2:] if code else sym))
+                self._json(drawings_store.load(data_source.short_code(sym)))
+            elif u.path == "/api/source-status":
+                self._json(data_source.source_status())
             elif u.path == "/api/ping":
                 self._json({"ok": True})
             else:
@@ -129,8 +133,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/drawings":
                 sym = (q.get("symbol") or [""])[0]
-                code = data_source.normalize_symbol(sym)
-                code = code[2:] if code else sym
+                code = data_source.short_code(sym)
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length) or b"{}")
                 items = body.get("items")

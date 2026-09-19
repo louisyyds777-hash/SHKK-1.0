@@ -91,6 +91,23 @@
     border-top:2px dashed #d8cfb6; margin-top:6px; padding:6px 10px 2px;
     color:#8b7f6a; font-size:12.5px; text-align:center;
   }
+  .src-box{
+    border-top:2px dashed #d8cfb6; margin-top:6px; padding:6px 10px 4px; flex:none;
+  }
+  .src-head{
+    font-size:12.5px; font-weight:bold; color:#8b7f6a; text-align:center;
+    letter-spacing:1.5px; padding-bottom:4px;
+  }
+  .src-item{display:flex; align-items:center; gap:7px; font-size:12.5px; padding:2.5px 0;}
+  .src-dot{
+    width:9px; height:9px; border-radius:50%; flex:none;
+    box-shadow:inset 0 0 0 1px rgba(90,78,60,.3);
+  }
+  .src-dot.ok{background:#3f9d63;}
+  .src-dot.bad{background:#c23a2f;}
+  .src-name{flex:1; color:var(--ink);}
+  .src-ms{color:#8b7f6a; font-size:11.5px;}
+  .src-time{color:#8b7f6a; font-size:11px; text-align:center; padding-top:3px;}
   .chart-col{flex:1; min-width:0;}
   .chart-stack{position:relative;}
   #chart{
@@ -168,6 +185,10 @@
     <aside class="watchlist">
       <div class="wl-head">自选库</div>
       <div id="wlItems"></div>
+      <div class="src-box">
+        <div class="src-head">数据源状态</div>
+        <div id="srcList" class="src-list"></div>
+      </div>
       <div class="wl-foot">点击切换 · ✕ 移除</div>
     </aside>
     <div class="chart-col">
@@ -208,9 +229,10 @@ const C = {
 };
 const FONT = "'KaiTi','楷体','STKaiti',serif";
 const SERVER = location.protocol !== 'file:';
-const TF_MS = { '5m':300000, '30m':1800000, '60m':3600000 };
+const TF_MS = { '1m':60000, '5m':300000, '30m':1800000, '60m':3600000 };
 
 const PERIODS = {
+  '1m' : { label:'1分钟',  full:'1分钟',          kind:'min' },
   '5m' : { label:'5分钟',  full:'5分钟',          kind:'min' },
   '30m': { label:'30分钟', full:'30分钟',         kind:'min' },
   '60m': { label:'60分钟', full:'60分钟（1小时）', kind:'min' },
@@ -234,14 +256,36 @@ const STOCKS = [
   ['600519','贵州茅台',1500],['000001','平安银行',11.5],['000858','五粮液',132],
   ['601318','中国平安',48],['300750','宁德时代',212],['002594','比亚迪',96],
   ['600036','招商银行',38],['000651','格力电器',46],['601899','紫金矿业',17.5],
-  ['002463','沪电股份',36]
+  ['002463','沪电股份',36],
+  ['BTCUSDT','比特币',81000],['ETHUSDT','以太坊',3200],['SOLUSDT','Solana',140],
+  ['BNBUSDT','BNB',780],['DOGEUSDT','狗狗币',0.18],['UNIUSDT','Uniswap',9.5],
+  ['XRPUSDT','瑞波币',2.1]
 ];
+/* 加密品种表（与服务端 data_source.CRYPTO 对应）：BTC / btc-usdt / 比特币 等写法都能识别 */
+const CRYPTO={'BTCUSDT':'比特币','ETHUSDT':'以太坊','SOLUSDT':'Solana','BNBUSDT':'BNB',
+              'DOGEUSDT':'狗狗币','UNIUSDT':'Uniswap','XRPUSDT':'瑞波币'};
+function cryptoAlias(q){
+  const s=String(q||'').trim().toUpperCase().replace(/\s+/g,'');
+  if(!s) return null;
+  if(CRYPTO[s]) return s;
+  const m=s.match(/^([A-Z0-9]{2,10})[-\/]?USDT$/);
+  if(m&&CRYPTO[m[1]+'USDT']) return m[1]+'USDT';
+  const b=s.replace(/USDT$/,'');
+  for(const c in CRYPTO) if(c.slice(0,-4)===b) return c;
+  const t=String(q).trim();
+  for(const c in CRYPTO) if(CRYPTO[c]===t) return c;
+  for(const c in CRYPTO) if(CRYPTO[c].includes(t)) return c;   /* 比特→比特币 支持部分中文名回车 */
+  return null;
+}
+const isCryptoCode=c=>!!CRYPTO[String(c).toUpperCase()];
 
 /* ================= 工具 ================= */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 function codeHash(str){ let h=0; for(let i=0;i<str.length;i++) h=(h*31+str.charCodeAt(i))|0; return Math.abs(h); }
-const fmt2 = x => x.toFixed(2);
-const fmtVol = v => (v/10000).toFixed(1)+'万手';
+const fmt2 = x => x<0.01 ? x.toFixed(5) : x<1 ? x.toFixed(4) : x.toFixed(2);   /* 低价币自动加位数（DOGE等） */
+const fmtVol = v => isCryptoCode(curStock.code)          /* 加密量=币数，A股量=手 */
+  ? (v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e4?(v/1e4).toFixed(1)+'万':v.toFixed(1))+' '+curStock.code.replace(/USDT$/,'')
+  : (v/10000).toFixed(1)+'万手';
 function d0(dt){return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');}
 function shortDate(dt){return (dt.getMonth()+1)+'/'+String(dt.getDate()).padStart(2,'0');}
 function hhmm(dt){return String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0');}
@@ -268,13 +312,18 @@ let _hk='55'; try{ _hk=localStorage.getItem('hd_height')||'55'; }catch(e){}
 const HEIGHT_K={'55':1.87,'42':2.45};             // K线高度档位：价格轴范围系数（越大K线越矮）
 if(!HEIGHT_K[_hk]) _hk='55';
 let heightK=HEIGHT_K[_hk];
-const nameCache={'600519':'贵州茅台'};
+const nameCache=Object.assign({'600519':'贵州茅台'},CRYPTO);
 let watchlist=['600519','300750','601899','000858'];
 try{
   const saved=localStorage.getItem('hd_watchlist');
   if(saved && Array.isArray(JSON.parse(saved))) watchlist=JSON.parse(saved);
+  if(+localStorage.getItem('hd_crypto_seeded')<2){    /* v2：补种加密品种并立即落盘（v1只改内存，刷新即丢） */
+    Object.keys(CRYPTO).forEach(c=>{ if(!watchlist.includes(c)) watchlist.push(c); });
+    localStorage.setItem('hd_crypto_seeded','2');
+    localStorage.setItem('hd_watchlist',JSON.stringify(watchlist));
+  }
   const last=localStorage.getItem('hd_last');
-  if(last && /^\d{6}$/.test(last)) curStock.code=last;
+  if(last && (/^\d{6}$/.test(last)||cryptoAlias(last))) curStock.code=last;
 }catch(e){}
 function saveLocal(){
   try{
@@ -285,7 +334,8 @@ function saveLocal(){
 
 /* ================= 离线兜底：模拟数据（file:// 打开时） ================= */
 function genData(periodKey, seed, base){
-  const cfg={ '5m':{perDay:48,sigma:0.0035,gap:0.0005,days:10},
+  const cfg={ '1m':{perDay:240,sigma:0.0016,gap:0.0002,days:3},
+              '5m':{perDay:48,sigma:0.0035,gap:0.0005,days:10},
               '30m':{perDay:8,sigma:0.0085,gap:0.0013,days:30},
               '60m':{perDay:4,sigma:0.012,gap:0.0018,days:45},
               '1d':{perDay:1,sigma:0.024,gap:0.008,days:120},
@@ -329,6 +379,8 @@ function genData(periodKey, seed, base){
 
 /* ================= 数据加载 ================= */
 let loadStamp=0;
+let curSrc=null;               /* 当前图的数据来源（服务端打点：{src,ms,at}；空对象=缓存命中未打点） */
+const normSrc = s => (s && s.src) ? s : null;
 async function loadBars(){
   const stamp=++loadStamp;
   if(!SERVER){
@@ -341,11 +393,13 @@ async function loadBars(){
     const d=await fetchJSON('/api/kline?symbol='+curStock.code+'&period='+curPeriod);
     if(stamp!==loadStamp) return;
     if(d.name){ curStock.name=d.name; nameCache[curStock.code]=d.name; }
+    curSrc=normSrc(d.src);
     bars=d.bars.map(b=>({ts:b[0],o:b[1],h:b[2],l:b[3],c:b[4],v:b[5],d1:false}));
     computeD1();
     postLoad(); loadDrawings();
     setTimeout(()=>silentRefresh(stamp),12000);   /* 后台补全深历史后无感加深 */
   }catch(e){
+    curSrc=null;
     setStatus('加载失败：'+e.message+'（重试可点击周期或重新查询）');
   }
 }
@@ -353,7 +407,9 @@ async function silentRefresh(stamp){
   if(stamp!==loadStamp) return;
   try{
     const d=await fetchJSON('/api/kline?symbol='+curStock.code+'&period='+curPeriod);
-    if(stamp!==loadStamp||d.bars.length<=bars.length) return;
+    if(stamp!==loadStamp) return;
+    curSrc=normSrc(d.src)||curSrc;
+    if(d.bars.length<=bars.length){ updateStatus(); return; }
     bars=d.bars.map(b=>({ts:b[0],o:b[1],h:b[2],l:b[3],c:b[4],v:b[5],d1:false}));
     computeD1(); renderBase(); updateStatus();    /* 保持当前视野不变，只是历史变深 */
   }catch(e){}
@@ -1095,7 +1151,7 @@ function renderDrop(list,q,ready){
   searchDrop.innerHTML='';
   if(!q.trim()){ searchDrop.style.display='none'; return; }
   if(ready===false){
-    searchDrop.innerHTML='<div class="sd-none">股票列表构建中（约1分钟），可直接输入6位代码回车</div>';
+    searchDrop.innerHTML='<div class="sd-none">A股列表构建中（约1分钟），可直接输入6位代码或 BTC 等币名回车</div>';
     searchDrop.style.display='block'; return;
   }
   if(!list.length&&!/^\d{6}$/.test(q.trim())){
@@ -1136,7 +1192,7 @@ searchInput.addEventListener('keydown',e=>{
   if(e.key!=='Enter') return;
   const q=searchInput.value.trim();
   if(/^\d{6}$/.test(q)){ setStock(q); }
-  else if(!SERVER){ const m=mockMatches(q); if(m.length) setStock(m[0].code); }
+  else{ const c=cryptoAlias(q); if(c) setStock(c); else if(!SERVER){ const m=mockMatches(q); if(m.length) setStock(m[0].code); } }
   searchDrop.style.display='none';
 });
 const wlItems=document.getElementById('wlItems');
@@ -1245,11 +1301,36 @@ document.getElementById('btnExport').addEventListener('click',()=>{
   a.click();
 });
 function updateStatus(){
+  const srcTxt = SERVER ? (curSrc ? ' · 源 '+curSrc.src+(curSrc.ms?' '+curSrc.ms+'ms':'') : ' · 源 本地缓存') : '';
   setStatus(curStock.name+'（'+curStock.code+'）· 自选 '+watchlist.length+' 只 · 周期：'+PERIODS[curPeriod].full
-    +' · 画风：'+STYLES[curStyle].name+' · 共 '+bars.length+' 根'
+    +' · 画风：'+STYLES[curStyle].name+' · 共 '+bars.length+' 根'+srcTxt
     +(SERVER?'':' · 离线演示数据')
     +' · 滚轮缩放 · 拖动平移 · 双击复位');
 }
+
+/* 数据源状态：侧栏体检盒，60秒一轮；离线（file://）不显示 */
+async function refreshSourceStatus(){
+  if(!SERVER) return;
+  try{
+    const d=await fetchJSON('/api/source-status');
+    const box=document.getElementById('srcList');
+    if(!box) return;
+    box.innerHTML='';
+    Object.entries(d.sources).forEach(([name,st])=>{
+      const div=document.createElement('div'); div.className='src-item';
+      const dot=document.createElement('span'); dot.className='src-dot '+(st.ok?'ok':'bad');
+      const nm=document.createElement('span'); nm.className='src-name'; nm.textContent=name;
+      const ms=document.createElement('span'); ms.className='src-ms'; ms.textContent=st.ok?st.ms+'ms':'超时/失败';
+      div.append(dot,nm,ms);
+      box.appendChild(div);
+    });
+    const t=document.createElement('div'); t.className='src-time';
+    t.textContent='检测于 '+hhmm(new Date(d.at*1000));
+    box.appendChild(t);
+  }catch(e){}
+}
+refreshSourceStatus();
+setInterval(refreshSourceStatus,60000);
 
 /* ================= 启动 ================= */
 const qp=new URLSearchParams(location.search);
